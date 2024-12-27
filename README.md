@@ -1,6 +1,6 @@
 cli-gui
 ============================
-null
+Build GUIs on the commandline
 
 Usage
 -----
