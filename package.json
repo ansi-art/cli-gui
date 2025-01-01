@@ -23,17 +23,17 @@
             "require": "./dist/index.cjs"
         }
     },
-    "homepage": "null",
-    "description": "null",
+    "homepage": "https://github.com/ansi-art/cli-gui",
+    "description": "A simple paneled abstraction for terminal GUIs",
     "keywords": [],
-    "author": "null <null>()",
+    "author": "Abbey Hawk Sparrow <khrome>(http://abbeyhawksparrow.com)",
     "contributors": [],
     "repository": {
         "type": "git",
-        "url": "null"
+        "url": "git@github.com:ansi-art/cli-gui.git"
     },
     "bugs": {
-        "url": "null"
+        "url": "https://github.com/ansi-art/cli-gui/issues"
     },
     "moka": {
         "firefox": {
@@ -104,7 +104,9 @@
     },
     "dependencies": {
         "@ansi-art/color": "^3.0.0-alpha4",
+        "@ansi-art/interactive-input": "^0.0.1",
         "@ansi-art/table": "^3.0.0-alpha3",
+        "@ansi-art/tools": "^3.0.0-alpha5",
         "browser-or-node": "^2.1.1"
     }
 }

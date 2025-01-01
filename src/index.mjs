@@ -15,7 +15,11 @@ const ensureRequire = ()=> (!internalRequire) && (internalRequire = mod.createRe
 import { Border } from '@ansi-art/table';
 import { Ansi, Grid } from '@ansi-art/tools';
 import { Color } from '@ansi-art/color';
-//import { Panel } from './panel.mjs';
+import { Panel } from './panel.mjs';
+import { OutputPanel } from './output-panel.mjs';
+import { InteractiveInput } from '@ansi-art/interactive-input';
+
+export { Panel, OutputPanel };
 
 const nByM = (chr, n, m)=>{
     const lines = [];
@@ -36,14 +40,105 @@ export class Interface{
     
     addPanel(panel){
         this.panels.push(panel);  
+        if(!this.focused) this.focused = panel;
     }
     
     removePanel(panel){
-        
+        const index = this.panels.indexOf(panel);
+        if(index!==-1){
+            this.panels.splice(index, 1);
+            if(this.focused === panel) this.focused = null;
+        }else{
+            this.terminate(true);
+        }
+    }
+    
+    focus(panel){
+        this.focused = panel;
+    }
+    
+    focusedPanel(){
+        return this.focused;
+    }
+    
+    pick(x, y){
+        let offset = null;
+        for(let lcv=0; lcv < this.panels.length; lcv++){
+            offset = this.panels[lcv].offsets(y, x);
+            if(
+                x > offset.x &&
+                x < offset.x + this.panels[lcv].width &&
+                y > offset.y &&
+                y < offset.y + this.panels[lcv].height
+            ){
+                console.log('FOUND', x, y, this.panels[lcv]);
+                process.exit();
+                return this.panels[lcv];
+            }
+        }
+        return null;
+    }
+    
+    consoleOuput(){
+        const panel = new OutputPanel({ 
+            height: 10,
+            verticalLayout: 'bottom'
+        });
+        this.addPanel(panel);
+        panel.attachToConsole();
+        this.focus(panel);
+        return panel;
     }
     
     alert(content){
-        
+        const panel = new Panel({ 
+            height: 5,
+            text: content,
+            name:'alert-'+Math.floor(Math.random()*100000000),
+            buttons: [
+                { 
+                    label: 'OK',
+                    action: ()=>{ }
+                }
+            ]
+        });
+        this.addPanel(panel);
+        this.focus(panel);
+    }
+    
+    async confirm(content, confirmFn){
+        const panel = new Panel({ 
+            height: 5,
+            text: content,
+            name:'confirm-'+Math.floor(Math.random()*100000000),
+            buttons: [
+                { 
+                    label: 'Cancel',
+                    action: ()=>{
+                        this.removePanel(panel);
+                    }
+                },
+                { 
+                    label: 'OK',
+                    action: ()=>{
+                        this.terminate(true);
+                    }
+                }
+            ]
+        });
+        this.addPanel(panel);
+        this.focus(panel);
+    }
+    
+    dialog(content, buttons){
+        const panel = new Panel({ 
+            height: 5,
+            name:'dialog-'+Math.floor(Math.random()*100000000),
+            text: content,
+            buttons
+        });
+        this.addPanel(panel);
+        this.focus(panel);
     }
     
     render(rows, cols){
@@ -52,10 +147,21 @@ export class Interface{
         const grid = new Grid(borderedFrame, { bitDepth: this.bitDepth });
         let offset = null;
         for(let lcv=0; lcv < this.panels.length; lcv++){
-            offset = this.panels.offsets();
-            this.panels[lcv].drawOnto(grid, offset.x, offset.y);
+            offset = this.panels[lcv].offsets(rows, cols);
+            this.panels[lcv].drawOnto(grid, offset.y, offset.x);
         }
-        return grid.toString();
+        if(this.cursor && this.cursor.x && this.cursor.y){
+            console.log(this.cursor);
+            //process.exit();
+            //const value = grid.getValue(this.cursor.x, this.cursor.y); //value.chr
+            grid.setValue(this.cursor.x, this.cursor.y, '↖', ['inverse']);
+            grid.setValue(
+                this.cursor.x+1, 
+                this.cursor.y, 
+                grid.getValue( this.cursor.x+1, this.cursor.y).chr, 
+                ['reset']);
+        }
+        return grid.toString().trim();
     }
     
     async initialize(){
@@ -70,6 +176,11 @@ export class Interface{
             });
         });
         //*/
+    }
+    
+    terminate(stop){
+        if(this.input) this.input.stop();
+        if(stop) process.exit();
     }
     
     async fullFrameRenderLoop(){
@@ -87,140 +198,70 @@ export class Interface{
             )?process.stdout.rows:40;
             const frame = this.render(rows, columns);
             process.stdout.write(frame);
-            //var numLines = frame?frame.split("\n").length:0;
             setTimeout(()=>{
                 process.stdout.write('\x1B['+(rows)+'F');
                 loop();
             });
         };
-        //mouse events on
-        //console.log('\x1B[?1000h');
-        process.stdout.write('\x1B[?12l');
         loop();
+        
+        const tracker = new InteractiveInput({});
+        this.input = tracker;
         process.stdin.setRawMode(true);
         process.stdin.on('data', (buffer) => {
-            const keyName = getKeyName(buffer.toJSON().data);
-            if(keyName === 'Escape'){
-                process.exit();
+            tracker.consume(buffer.toJSON());
+        });
+        tracker.start();
+        const gracefulTerminate = ()=>{ this.terminate(); };
+        process.on('SIGTERM', gracefulTerminate);
+        process.on('SIGINT', gracefulTerminate);
+        tracker.on('keypress', (event)=>{
+            process.stdout.write(JSON.stringify(event));
+            if(event.ctrlKey && event.key === 'q'){
+                this.confirm('Are you sure you want to quit?', ()=>{
+                    this.terminate(true);
+                });
             }
-            /*
-            switch(keyName){
-                case 'ArrowUp' : 
-                    engine.grid.avatar.position.y++;
-                    break;
-                case 'ArrowDown' : 
-                    engine.grid.avatar.position.y--;
-                    break;
-                case 'ArrowLeft' : 
-                    engine.grid.avatar.position.x--;
-                    break;
-                case 'ArrowRight' : 
-                    engine.grid.avatar.position.x++;
-                    break;
-                default: console.log(keyName);
+            if(event.key === 'Escape'){
+                if(this.console){
+                    this.removePanel(this.console);
+                    this.console = null;
+                }else{
+                    this.console = this.consoleOuput();
+                }
             }
-            //*/
-            //console.log(keyName);
+            if(event.key === 'Enter'){
+                if(this.focused){
+                    const input = this.focused.selectedInput();
+                    if(input){
+                        const action = input.action;
+                        if(action){
+                            action();
+                        }
+                    }
+                }
+            }
+            if(event.key === 'Tab'){
+                if(this.focused){
+                    this.focused.selectNextFocusable();
+                }
+            }
+            if(event.ctrlKey && event.key === 'c'){
+                this.terminate(true);
+            }
+        });
+        tracker.on('mousedown', (event)=>{
+            console.log(event);
+            this.pick(event.pageX, event.pageY);
+        });
+        tracker.on('mousemove', (event)=>{
+            this.cursor = {
+                x: event.pageX,
+                y: event.pageY
+            };
+        });
+        tracker.on('mouseup', (event)=>{
+            this.pick(event.pageX, event.pageY);
         });
     }
 }
-
-const Key = {
-    Unknown  : '',
-    
-    // other Ascii
-    Backspace  : 'Backspace',
-    Tab  : 'Tab',
-    Enter  : 'Enter',
-    Escape  : 'Escape',
-    Space  : 'Space',
-    Delete  : 'Delete',
-    
-    // arrows
-    ArrowUp  : 'ArrowUp',
-    ArrowDown  : 'ArrowDown',
-    ArrowRight  : 'ArrowRight',
-    ArrowLeft  : 'ArrowLeft',
-    
-    // cursor position
-    Home  : 'Home',
-    Insert  : 'Insert',
-    End  : 'End',
-    PageUp  : 'PageUp',
-    PageDown  : 'PageDown',
-    
-    // functional
-    F1  : 'F1',
-    F2  : 'F2',
-    F3  : 'F3',
-    F4  : 'F4',
-    F5  : 'F5',
-    F6  : 'F6',
-    F7  : 'F7',
-    F8  : 'F8',
-    F9  : 'F9',
-    F10  : 'F10',
-    F11  : 'F11',
-    F12  : 'F12'
-};
-
-const keyMap = [
-    // other ASCII
-    { data: [[8], [127]], keyName: Key.Backspace }, // ssh connection via putty generates 127 for Backspace - weird...
-    { data: [[9]], keyName: Key.Tab },
-    { data: [[13]], keyName: Key.Enter },
-    { data: [[27]], keyName: Key.Escape },
-    { data: [[32]], keyName: Key.Space },
-    { data: [[27, 91, 51, 126]], keyName: Key.Delete },
-    // arrows
-    { data: [[27, 91, 65]], keyName: Key.ArrowUp },
-    { data: [[27, 91, 66]], keyName: Key.ArrowDown },
-    { data: [[27, 91, 67]], keyName: Key.ArrowRight },
-    { data: [[27, 91, 68]], keyName: Key.ArrowLeft },
-    // cursor position
-    { data: [[27, 91, 49, 126]], keyName: Key.Home },
-    { data: [[27, 91, 50, 126]], keyName: Key.Insert },
-    { data: [[27, 91, 52, 126]], keyName: Key.End },
-    { data: [[27, 91, 53, 126]], keyName: Key.PageUp },
-    { data: [[27, 91, 54, 126]], keyName: Key.PageDown },
-    // functional
-    { data: [[27, 91, 91, 65], [27, 91, 49, 49, 126]], keyName: Key.F1 },
-    { data: [[27, 91, 91, 66], [27, 91, 49, 50, 126]], keyName: Key.F2 },
-    { data: [[27, 91, 91, 67], [27, 91, 49, 51, 126]], keyName: Key.F3 },
-    { data: [[27, 91, 91, 68], [27, 91, 49, 52, 126]], keyName: Key.F4 },
-    { data: [[27, 91, 91, 69], [27, 91, 49, 53, 126]], keyName: Key.F5 },
-    { data: [[27, 91, 49, 55, 126]], keyName: Key.F6 },
-    { data: [[27, 91, 49, 56, 126]], keyName: Key.F7 },
-    { data: [[27, 91, 49, 57, 126]], keyName: Key.F8 },
-    { data: [[27, 91, 50, 48, 126]], keyName: Key.F9 },
-    { data: [[27, 91, 50, 49, 126]], keyName: Key.F10 },
-    { data: [[27, 91, 50, 51, 126]], keyName: Key.F11 },
-    { data: [[27, 91, 50, 52, 126]], keyName: Key.F12 }
-];
-
-export const getKeyName = (data) => {
-    let match;
-    
-    if (isSingleBytePrintableAscii(data)) {
-        return String.fromCharCode(data[0]);
-    }
-    
-    match = keyMap.filter((entry) => {
-        const innerResult = entry.data.filter((subEntry) => subEntry.join(',') === data.join(','));
-    
-        return innerResult.length > 0;
-    });
-    
-    if (match.length === 1) {
-        return match[0].keyName;
-    }
-    
-    return Key.Unknown;
-};
-
-const isSingleBytePrintableAscii = (data) => {
-    // skip tilde as this is not the key available via single press
-    return data.length === 1 &&
-        '!'.charCodeAt(0) <= data[0] &&
-        data[0] <= '}'.charCodeAt(0);
-};
